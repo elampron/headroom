@@ -3084,6 +3084,8 @@ class AnthropicHandlerMixin:
                     tags=tags,
                     count_messages=tokenizer.count_messages,
                     count_tools=_count_tool_tokens,
+                    session_id=session_id,
+                    request_id=request_id,
                 )
                 # Snapshot BEFORE the hook (same tokenizer) so we can tell whether the
                 # hook itself folded — comparing against the pipeline's optimized_tokens

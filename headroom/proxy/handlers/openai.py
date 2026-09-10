@@ -2754,6 +2754,7 @@ class OpenAIHandlerMixin:
         *,
         model: str,
         request_id: str,
+        session_id: str | None = None,
         timing: dict[str, float] | None = None,
         client: str | None = None,
         savings_tags: dict[str, Any] | None = None,
@@ -2969,6 +2970,8 @@ class OpenAIHandlerMixin:
                     if value
                     else 0
                 ),
+                session_id=session_id,
+                request_id=request_id,
             )
             # Streaming turns get fold-only hooks, same rule as the
             # chat-completions path. A hook that defers work to `on_response`
@@ -3137,6 +3140,7 @@ class OpenAIHandlerMixin:
         *,
         model: str,
         request_id: str,
+        session_id: str | None = None,
         timeout: float = COMPRESSION_TIMEOUT_SECONDS,
         client: str | None = None,
         savings_tags: dict[str, Any] | None = None,
@@ -3181,6 +3185,7 @@ class OpenAIHandlerMixin:
             compression_kwargs: dict[str, Any] = {
                 "model": model,
                 "request_id": request_id,
+                "session_id": session_id,
                 "timing": timing,
                 "client": client,
             }
@@ -3197,7 +3202,7 @@ class OpenAIHandlerMixin:
                     unsupported_kwarg = next(
                         (
                             name
-                            for name in ("savings_tags", "client", "timing")
+                            for name in ("savings_tags", "client", "timing", "session_id")
                             if f"unexpected keyword argument '{name}'" in str(exc)
                             and name in compression_kwargs
                         ),
@@ -4423,6 +4428,8 @@ class OpenAIHandlerMixin:
                 count_tools=lambda value: (
                     tokenizer.count_text(json.dumps(value, default=str)) if value else 0
                 ),
+                session_id=openai_session_id,
+                request_id=request_id,
             )
             # Snapshot messages BEFORE the hook (same tokenizer) so we can tell whether
             # the hook itself folded — comparing against optimized_tokens instead
@@ -4715,6 +4722,8 @@ class OpenAIHandlerMixin:
                                     messages=optimized_messages,
                                     tools=tools,
                                     config=self.config,
+                                    session_id=openai_session_id,
+                                    request_id=request_id,
                                 ),
                                 final_resp_json,
                                 api_call_fn,
@@ -4961,6 +4970,8 @@ class OpenAIHandlerMixin:
                             tools=body.get("tools"),
                             config=self.config,
                             tags=tags,
+                            session_id=openai_session_id,
+                            request_id=request_id,
                         )
 
                         async def _hook_call_model(_msgs):
@@ -5904,6 +5915,7 @@ class OpenAIHandlerMixin:
                     body,
                     model=model,
                     request_id=request_id,
+                    session_id=_responses_session_id,
                     client=client,
                     savings_tags=tags,
                 )
@@ -6194,6 +6206,8 @@ class OpenAIHandlerMixin:
                                 tools=body.get("tools"),
                                 config=self.config,
                                 tags=tags,
+                                session_id=_responses_session_id,
+                                request_id=request_id,
                             )
 
                             async def _resp_hook_call_model(
@@ -7724,6 +7738,7 @@ class OpenAIHandlerMixin:
                                 _inner,
                                 model=_model,
                                 request_id=request_id,
+                                session_id=f"ws:{session_id}",
                                 timeout=_codex_ws_compression_timeout_seconds()
                                 if client == "codex"
                                 else COMPRESSION_TIMEOUT_SECONDS,
@@ -8098,6 +8113,7 @@ class OpenAIHandlerMixin:
                                     inner_payload,
                                     model=model_for_frame,
                                     request_id=request_id,
+                                    session_id=f"ws:{session_id}",
                                     timeout=_codex_ws_compression_timeout_seconds()
                                     if client == "codex"
                                     else COMPRESSION_TIMEOUT_SECONDS,

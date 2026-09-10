@@ -205,6 +205,22 @@ class _RedriveOnce:
         return await call_model(ctx.messages)
 
 
+class _MetadataObserver:
+    name = "metadata_observer"
+    stream_safe = True
+
+    def __init__(self) -> None:
+        self.request_contexts: list[Any] = []
+        self.response_contexts: list[Any] = []
+
+    def on_request(self, ctx: Any) -> None:
+        self.request_contexts.append(ctx)
+
+    async def on_response(self, ctx: Any, response: Any, call_model: Any) -> None:
+        self.response_contexts.append(ctx)
+        return None
+
+
 @pytest.fixture
 def _no_hooks():
     clear_turn_hooks()
@@ -321,6 +337,74 @@ def test_responses_bills_the_original_plus_the_redrive(monkeypatch, _no_hooks) -
 
 
 @respx.mock
+def test_responses_buffered_hook_receives_session_and_unique_request_ids(
+    monkeypatch, _no_hooks
+) -> None:
+    hook = _MetadataObserver()
+    register_turn_hook(hook)
+    app, _outcomes = _app_and_outcomes(monkeypatch)
+    app.state.proxy.session_tracker_store.compute_session_id = lambda request, model, messages: (
+        "responses-conversation-1"
+    )
+    respx.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "response",
+                "output": [{"type": "message", "role": "assistant", "content": []}],
+                "usage": {"input_tokens": 10, "output_tokens": 2},
+            },
+        )
+    )
+
+    with TestClient(app) as client:
+        for text in ("first", "second"):
+            result = client.post(
+                "/v1/responses",
+                json={
+                    "model": "gpt-4o",
+                    "input": text,
+                    "stream": False,
+                },
+                headers={"authorization": "Bearer sk-test"},
+            )
+            assert result.status_code == 200
+
+    assert [ctx.session_id for ctx in hook.response_contexts] == [
+        "responses-conversation-1",
+        "responses-conversation-1",
+    ]
+    request_ids = [ctx.request_id for ctx in hook.response_contexts]
+    assert all(request_ids)
+    assert len(set(request_ids)) == 2
+
+
+def test_responses_request_hook_receives_supplied_handler_metadata(_no_hooks) -> None:
+    hook = _MetadataObserver()
+    register_turn_hook(hook)
+    app = create_app(
+        ProxyConfig(
+            optimize=False,
+            cache_enabled=False,
+            rate_limit_enabled=False,
+            cost_tracking_enabled=False,
+            log_requests=False,
+        )
+    )
+
+    app.state.proxy._compress_openai_responses_payload(
+        {"model": "gpt-4o", "input": "hello"},
+        model="gpt-4o",
+        request_id="hr_test_000001",
+        session_id="responses-conversation-1",
+    )
+
+    assert len(hook.request_contexts) == 1
+    assert hook.request_contexts[0].session_id == "responses-conversation-1"
+    assert hook.request_contexts[0].request_id == "hr_test_000001"
+
+
+@respx.mock
 def test_no_hook_registered_bills_exactly_the_one_call(monkeypatch, _no_hooks) -> None:
     """The regression guard in the other direction: with no hook, accounting must
     be untouched — this whole mechanism has to be inert on a stock proxy."""
@@ -403,3 +487,51 @@ def test_anthropic_bills_original_plus_hook_redrive(monkeypatch, _no_hooks) -> N
     assert outcome.cache_read_tokens == 120
     assert outcome.cache_write_tokens == 55
     assert outcome.uncached_input_tokens == 250
+
+
+@respx.mock
+def test_anthropic_buffered_hooks_share_request_and_session_metadata(
+    monkeypatch, _no_hooks
+) -> None:
+    hook = _MetadataObserver()
+    register_turn_hook(hook)
+    app, _outcomes = _app_and_outcomes(monkeypatch)
+    app.state.proxy.session_tracker_store.compute_session_id = lambda request, model, messages: (
+        "anthropic-conversation-1"
+    )
+    respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 2},
+            },
+        )
+    )
+
+    with TestClient(app) as client:
+        result = client.post(
+            "/v1/messages",
+            json={
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            headers={
+                "x-api-key": "sk-ant-test",
+                "anthropic-version": "2023-06-01",
+            },
+        )
+
+    assert result.status_code == 200
+    assert len(hook.request_contexts) == len(hook.response_contexts) == 1
+    request_ctx = hook.request_contexts[0]
+    response_ctx = hook.response_contexts[0]
+    assert response_ctx is request_ctx
+    assert request_ctx.session_id == "anthropic-conversation-1"
+    assert request_ctx.request_id

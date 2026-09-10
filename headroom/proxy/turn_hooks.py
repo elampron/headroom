@@ -40,6 +40,9 @@ class TurnContext:
 
     ``tools`` and ``messages`` are the live objects the handler is about to send
     (or just sent); a hook's ``on_request`` may mutate them in place.
+    ``session_id`` is the handler's existing stable conversation identifier and
+    ``request_id`` uniquely identifies this proxy request. Some compatibility
+    paths cannot determine a session, so both values remain optional.
     """
 
     provider: str  # "anthropic" | "openai" | "google" | ...
@@ -53,6 +56,11 @@ class TurnContext:
     tags: dict[str, Any] = field(default_factory=dict)
     count_messages: Callable[[list[dict[str, Any]]], int] | None = None
     count_tools: Callable[[Any], int] | None = None
+    # Stable conversation identity and unique proxy request identity, when the
+    # surrounding handler has them. Optional defaults preserve compatibility
+    # with existing extensions and direct ``TurnContext(...)`` construction.
+    session_id: str | None = None
+    request_id: str | None = None
 
     def record_savings(
         self,
