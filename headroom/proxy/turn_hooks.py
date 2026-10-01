@@ -89,7 +89,16 @@ class TurnContext:
 @runtime_checkable
 class TurnHook(Protocol):
     """A registered turn observer. Both methods are optional (a hook may define
-    either); missing methods are simply skipped."""
+    either); missing methods are simply skipped.
+
+    Streaming observers may additionally define synchronous
+    ``on_stream_end(ctx, response)`` and set ``stream_safe=True``. The response
+    contains normalized visible text in ``choices[0].message``, plus
+    ``stream_status`` (complete/incomplete) and ``stream_truncated``. This
+    callback is read-only: enqueue local work only, never block on network I/O.
+    It runs on completion/error/disconnect, cannot replace output or re-drive,
+    and is not used for buffered responses. Hidden reasoning is never included.
+    """
 
     name: str
 
@@ -142,6 +151,10 @@ def run_request_hooks(ctx: TurnContext, *, stream_safe_only: bool = False) -> No
     working on streamed OpenAI-compatible traffic. Default off ⇒ conservative:
     a hook is treated as buffered-only unless it declares itself stream-safe.
     """
+    if stream_safe_only:
+        from headroom.proxy.stream_hooks import remember_stream_context
+
+        remember_stream_context(ctx)
     for hook in _hooks:
         if stream_safe_only and not getattr(hook, "stream_safe", False):
             continue
