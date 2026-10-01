@@ -49,6 +49,12 @@ def test_request_runner_inert_when_empty():
     assert ctx.tools is before
 
 
+def test_turn_context_metadata_defaults_preserve_existing_callers():
+    ctx = _ctx()
+    assert ctx.session_id is None
+    assert ctx.request_id is None
+
+
 @pytest.mark.asyncio
 async def test_response_runner_returns_input_unchanged_when_empty():
     resp = {"id": "orig", "content": []}

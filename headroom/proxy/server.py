@@ -3044,6 +3044,9 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         version=__version__,
         lifespan=lifespan,
     )
+    from headroom.proxy.stream_hooks import StreamHookMiddleware
+
+    app.add_middleware(StreamHookMiddleware)
     app.add_middleware(WebSocketProjectPrefixMiddleware)
     loop_health_state: LoopHealthState = {
         "status": "healthy",

@@ -136,6 +136,104 @@ def _post(client: TestClient, body: dict):
     )
 
 
+class _MetadataObserver:
+    name = "metadata_observer"
+    stream_safe = True
+
+    def __init__(self):
+        self.request_contexts = []
+        self.response_contexts = []
+
+    def on_request(self, ctx):
+        self.request_contexts.append(ctx)
+
+    async def on_response(self, ctx, response, call_model):
+        self.response_contexts.append(ctx)
+        return None
+
+
+def test_turn_context_metadata_is_stable_across_buffered_chat_turns():
+    hook = _MetadataObserver()
+    register_turn_hook(hook)
+
+    async def fake_retry(method, url, headers, body, *args, **kwargs):
+        return httpx.Response(
+            200, json=_final_response(), headers={"content-type": "application/json"}
+        )
+
+    app = create_app(_config())
+    with TestClient(app) as client:
+        client.app.state.proxy._retry_request = fake_retry
+        headers = {"Authorization": "Bearer test-key"}
+        first = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": "one Copilot conversation"},
+                    {"role": "user", "content": "first"},
+                ],
+                "stream": False,
+            },
+            headers=headers,
+        )
+        second = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": "one Copilot conversation"},
+                    {"role": "user", "content": "first"},
+                    {"role": "assistant", "content": "answer"},
+                    {"role": "user", "content": "second"},
+                ],
+                "stream": False,
+            },
+            headers=headers,
+        )
+
+    assert first.status_code == second.status_code == 200
+    session_ids = [ctx.session_id for ctx in hook.request_contexts]
+    assert all(session_ids)
+    assert len(set(session_ids)) == 1
+    request_ids = [ctx.request_id for ctx in hook.request_contexts]
+    assert all(request_ids)
+    assert len(set(request_ids)) == 2
+    assert hook.response_contexts == hook.request_contexts
+
+
+def test_streaming_chat_request_hook_receives_turn_context_metadata():
+    from fastapi.responses import Response
+
+    hook = _MetadataObserver()
+    register_turn_hook(hook)
+
+    async def fake_stream_response(*args, **kwargs):
+        return Response(content=b"data: [DONE]\n\n", media_type="text/event-stream")
+
+    app = create_app(_config())
+    with TestClient(app) as client:
+        client.app.state.proxy._stream_response = fake_stream_response
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "stream me"}],
+                "stream": True,
+            },
+            headers={
+                "Authorization": "Bearer test-key",
+                "x-headroom-session-id": "copilot-stream-1",
+            },
+        )
+
+    assert response.status_code == 200
+    assert len(hook.request_contexts) == 1
+    assert hook.request_contexts[0].session_id == "copilot-stream-1"
+    assert hook.request_contexts[0].request_id
+    assert hook.response_contexts == []
+
+
 def test_direct_path_shrinks_then_reloads_and_returns_final():
     hook = _FakeRouterHook()
     register_turn_hook(hook)
